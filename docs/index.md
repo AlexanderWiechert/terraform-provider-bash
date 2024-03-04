@@ -3,6 +3,9 @@
 This is a Terraform utility provider which aims to robustly generate Bash
 scripts which refer to data that originated in Terraform.
 
+HashiCorp Terraform introduced provider-contributed functions in Terraform v1.8,
+so this provider is not useful in earlier versions.
+
 When gluing other software into Terraform it's common to generate little shell
 snippets using Terraform's template language, such as when passing some shell
 commands to CloudInit installed on an AWS EC2 instance using `user_data`:
@@ -21,10 +24,10 @@ the source Terraform configuration, which can lead to robustness issues
 related to incorrect quoting/escaping and difficulty dealing with list and
 map data, when relevant.
 
-The `bash_script` data source in this provider aims to help with those more
-complex cases by automatically generating properly-formatted Bash variable
-declarations from a subset of Terraform language types, prepending them to
-a bash script template you provide which can then make use of those variables.
+The `script` function in this provider aims to help with those more complex
+cases by automatically generating properly-formatted Bash variable declarations
+from a subset of Terraform value types, prepending them to a bash script
+template you provide which can then make use of those variables.
 
 ```hcl
 terraform {
@@ -35,17 +38,12 @@ terraform {
   }
 }
 
-data "bash_script" "example" {
-  source = file("${path.module}/example.sh.tmpl")
-  variables = {
-    something_ip = aws_eip.example.public_ip
-    device_names = tolist(aws_volume_attachment.example[*].device_name)
-  }
-}
-
 resource "aws_instance" "example" {
   # ...
-  user_data = data.bash_script.example.result
+  user_data = provider::bash::script(file("${path.module}/example.sh.tmpl"), {
+    something_ip = aws_eip.example.public_ip
+    device_names = tolist(aws_volume_attachment.example[*].device_name)
+  })
 }
 ```
 
@@ -55,34 +53,38 @@ variables `something_ip` and `device_names` are predeclared:
 ```bash
 #!/bin/bash
 
+set -efuo pipefail
+
 /usr/local/bin/connect-to-something "${something_ip}"
 for device_name in "${device_names[@]}"; do
   /usr/local/bin/prepare-filesystem "/dev/${device_name}"
 done
 ```
 
-The `bash_script` data source will automatically generate Bash `declare`
-commands to represent the `something_ip` and `device_names` variables and
-then prepend that into the source script to produce a result that should work
-as a self-contained bash script:
+The `script` function will automatically generate Bash `declare` commands to
+represent the `something_ip` and `device_names` variables and then prepend that
+into the source script to produce a result that should work as a self-contained
+bash script:
 
 ```bash
 #!/bin/bash
 declare -r something_ip='192.0.2.5'
 declare -ra device_names=('sdb' 'sdc')
 
+set -efuo pipefail
+
 /usr/local/bin/connect-to-something "${something_ip}"
 for device_name in "${device_names[@]}"; do
   /usr/local/bin/prepare-filesystem "/dev/${device_name}"
 done
 ```
 
-Notice that `bash_script` doesn't actually _execute_ the script you provide.
-Instead, it exports a string attribute `result` which contains the script
-source code, ready for you to pass to some other resource argument that expects
-to recieve the source code of a Bash script.
+Notice that the function doesn't actually _execute_ the script you provide.
+Instead, it returns a string containing the script source code, ready for you
+to pass to some other resource argument that expects to recieve the source code
+of a Bash script.
 
-Because `bash_script` is aware of the syntax Bash expects for strings, integers,
+Because this provider is aware of the syntax Bash expects for strings, integers,
 arrays of strings, and a associative arrays of strings, it can automatically
 generate suitable quoting and other punctuation to ensure that the values
 pass into Bash exactly as they appear in Terraform, without any need for
@@ -91,7 +93,8 @@ manual escaping within the Terraform template language.
 All you need to do then is write a plain Bash script which uses standard Bash
 language features to interact with those generated declarations. This also means
 that your source script will be 100% direct Bash syntax, without any conflicts
-between Terraform's interpolation syntax and Bash's interpolation syntax.
+between Terraform's interpolation syntax and Bash's interpolation syntax, if
+you load it from a separate file as shown in the examples above.
 
 ## Passing Values to Bash
 
@@ -116,8 +119,8 @@ Values of any other type in `variables` will cause an error message.
 
 ## Using Values in Bash
 
-The `bash_script` data source ensures that all of the variables you define
-will be declared correctly to avoid escaping and quoting issues, but you must
+The `script` function ensures that all of the variables you define will be
+declared correctly to avoid escaping and quoting issues, but you must
 also ensure that you use those variables correctly elsewhere in the script
 to avoid Bash misinterpreting how you intend the value to be used.
 
@@ -128,7 +131,7 @@ in more complex scripts you can use the `if`, `case`, and `for` statements to
 select different code paths depending on those values.
 
 The following sections show some examples of common patterns that might arise
-in shell scripts generated using `bash_script`. This is not a full reference on
+in shell scripts generated using this provider. This is not a full reference on
 Bash syntax though; see [the Bash Reference Manual](https://www.gnu.org/software/bash/manual/bash.html)
 for all of the details.
 
@@ -181,7 +184,7 @@ echo "${num} * ${num} = $(( num * num ))"
 ```
 
 You can also use number values as indexes into an indexed array, as we'll see
-in the next section.
+in a later section.
 
 ### Conditional branches with `if` and `case`
 
@@ -194,7 +197,7 @@ necessary variable has been set to a non-empty value:
 
 ```bash
 if [ -n "${audit_host}" ]; then
-  /usr/local/bin/send-audit -- ${audit_host}
+  /usr/local/bin/send-audit -- "${audit_host}"
 fi
 ```
 
@@ -320,11 +323,11 @@ default Bash will replace that interpolation with an empty string, rather than
 returning an error.
 
 You can override that behavior and ask Bash to generate an explicit error for
-undefined references by setting the option `-x`. You can declare that within
+undefined references by setting the option `-u`. You can declare that within
 your script by using the `set` command as one of the first commands:
 
 ```bash
-set -x
+set -u
 ```
 
 Another common problem is that by default Bash will react to an error in an
@@ -337,10 +340,16 @@ more complex scripting features such as piping the output from one command
 into another then a failure further up the pipeline will not fail the overall
 pipeline by default. You can override that using the `-o pipefail` option.
 
+Finally, although this provider generates the original variable values using
+single-quoted strings to avoid interpretation as metacharacters, by default
+Bash will expand "glob" patterns after interpolating a string that contains
+the glob pattern characters. You can force Bash to take these values literally
+by disabling automatic globbing using the `-f` option.
+
 Putting those all together we can make a boilerplate `set` statement that can
 be useful to include in all scripts to ensure that they'll fail promptly in the
 case of various common scripting mistakes:
 
 ```
-set -exo pipefail
+set -efuo pipefail
 ```

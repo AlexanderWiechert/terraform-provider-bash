@@ -10,11 +10,18 @@
 package main
 
 import (
-	tf5server "github.com/hashicorp/terraform-plugin-go/tfprotov5/server"
+	"context"
+	"fmt"
+	"os"
 
 	"github.com/apparentlymart/terraform-provider-bash/internal/bash"
 )
 
 func main() {
-	tf5server.Serve("registry.terraform.io/apparentlymart/bash", bash.NewProvider)
+	provider := bash.NewProvider()
+	err := provider.Serve(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start provider: %s", err)
+		os.Exit(1)
+	}
 }

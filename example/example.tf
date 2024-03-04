@@ -5,14 +5,14 @@ terraform {
     }
     local = {
       source  = "hashicorp/local"
-      version = "~> 2.1.0"
+      version = "~> 2.4.1"
     }
   }
 }
 
-data "bash_script" "example" {
-  source = file("${path.module}/example.sh.tmpl")
-  variables = {
+resource "local_file" "example" {
+  filename = "${path.module}/example.sh"
+  content  = provider::bash::script(file("${path.module}/example.sh.tmpl"), {
     greeting = "Hello"
     names    = tolist(["Medhi", "Aurynn", "Kat", "Ariel"])
     num      = 3
@@ -21,12 +21,7 @@ data "bash_script" "example" {
       b = "i-456"
       c = "i-789"
     })
-  }
-}
-
-resource "local_file" "example" {
-  filename = "${path.module}/example.sh"
-  content  = data.bash_script.example.result
+  })
 }
 
 output "output_filename" {

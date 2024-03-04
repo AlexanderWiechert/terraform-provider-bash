@@ -1,6 +1,11 @@
 #!/bin/bash
 
-set -euo pipefail
+# These settings improve robustness:
+#  -e           halt immediately if any command fails
+#  -f           don't interpret glob syntax (in case any of the given variables include glob punctuation)
+#  -u           referring to an undeclared variable is an error
+#  -o pipefail  halt immediately if an intermediate command in a pipeline fails
+set -efuo pipefail
 
 # This is a very contrived script just to show how you might interact with
 # variables of each of the types that the bash_script data source can pass

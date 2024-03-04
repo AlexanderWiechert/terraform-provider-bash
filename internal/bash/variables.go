@@ -2,11 +2,10 @@ package bash
 
 import (
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-go/tfprotov5/tftypes"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // variablesToBashDecls tries to produce a bash script fragment containing
@@ -17,7 +16,7 @@ import (
 // that the variable names and values were already checked during configuration
 // decoding and so will just return something invalid if given an unsupported
 // value to deal with.
-func variablesToBashDecls(vars map[string]tftypes.Value) string {
+func variablesToBashDecls(vars map[string]cty.Value) string {
 	if len(vars) == 0 {
 		return ""
 	}
@@ -31,51 +30,51 @@ func variablesToBashDecls(vars map[string]tftypes.Value) string {
 
 	for _, name := range names {
 		val := vars[name]
+		ty := val.Type()
 		switch {
-		case val.Is(tftypes.String):
-			var s string
-			val.As(&s)
+		case ty == cty.String:
+			s := val.AsString()
 			buf.WriteString("declare -r ")
 			buf.WriteString(name)
 			buf.WriteString("=")
 			buf.WriteString(bashQuoteString(s))
 			buf.WriteString("\n")
-		case val.Is(tftypes.Number):
-			var f big.Float
-			val.As(&f)
+		case ty == cty.Number:
+			f := val.AsBigFloat()
 			// NOTE: Bash only actually supports integers, so here we're
-			// assuming that the configuration decoder already rejected
-			// fractional values.
+			// assuming that the caller already rejected fractional values.
 			buf.WriteString("declare -ri ")
 			buf.WriteString(name)
 			buf.WriteString("=")
 			buf.WriteString(f.Text('f', -1))
 			buf.WriteString("\n")
-		case val.Is(listOfString):
-			var l []tftypes.Value
-			val.As(&l)
+		case cty.List(cty.String).Equals(ty):
+			l := val.AsValueSlice()
 			buf.WriteString("declare -ra ")
 			buf.WriteString(name)
 			buf.WriteString("=(")
 			for i, ev := range l {
-				var es string
-				ev.As(&es)
+				es := ev.AsString()
 				if i != 0 {
 					buf.WriteString(" ")
 				}
 				buf.WriteString(bashQuoteString(es))
 			}
 			buf.WriteString(")\n")
-		case val.Is(mapOfString):
-			var m map[string]tftypes.Value
-			val.As(&m)
+		case cty.Map(cty.String).Equals(ty):
+			m := val.AsValueMap()
 			buf.WriteString("declare -rA ")
 			buf.WriteString(name)
 			buf.WriteString("=(")
+			names := make([]string, 0, len(m))
+			for name := range m {
+				names = append(names, name)
+			}
+			sort.Strings(names)
 			i := 0
-			for ek, ev := range m {
-				var es string
-				ev.As(&es)
+			for _, ek := range names {
+				ev := m[ek]
+				es := ev.AsString()
 				if i != 0 {
 					buf.WriteString(" ")
 				}
